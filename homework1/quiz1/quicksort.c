@@ -49,7 +49,7 @@ void quicksort_r(node_t **list)
 
 void quicksort_nr(node_t **list) {
     // non-recursive version of quicksort
-    #define MAX_LEVELS 1000
+    #define MAX_LEVELS 64
     node_t **L[MAX_LEVELS], *R[MAX_LEVELS]; // stack
 
     int i = 0;
@@ -57,6 +57,8 @@ void quicksort_nr(node_t **list) {
     while (i >= 0) {
         // pop from stack
         node_t **LL = L[i], *RR = R[i--];
+        if (*LL == RR)
+            continue;
 
         // choose first element as pivot
         // partition [pivot->next:RR)
@@ -66,22 +68,35 @@ void quicksort_nr(node_t **list) {
         pivot->next = NULL;
 
         node_t *left = NULL, *right = NULL;
+        int cntl = 0, cntr = 0;
         while (p != RR) {
             node_t *n = p;
             p = p->next;
-            list_add_node_t(n->value > pivot->value ? &right : &left, n);
+            if (n->value > pivot->value) list_add_node_t(&right, n), ++cntr;
+            else list_add_node_t(&left, n), ++cntl;
         }
         // keep list linked together
+        list_concat(&right, RR);
+        list_concat(&pivot, right);
+        list_concat(&left, pivot);
         list_concat(LL, left);
-        list_concat(LL, pivot);
-        list_concat(LL, right);
-        list_concat(LL, RR);
 
         // push into stack
-        if (*LL != pivot) // [*LL:pivot)
-            L[++i] = LL, R[i] = pivot;
-        if (pivot->next != RR) // [pivot->next:RR)
-            L[++i] = &(pivot->next), R[i] = RR;
+        L[++i] = LL, R[i] = pivot; // [*LL:pivot)
+        L[++i] = &(pivot->next), R[i] = RR; // [pivot->next:RR)
+        // handle shorter segment
+        if (cntl < cntr) {
+            {
+                node_t **tmp = L[i - 1];
+                L[i - 1] = L[i];
+                L[i] = tmp;
+            }
+            {
+                node_t *tmp = R[i - 1];
+                R[i - 1] = R[i];
+                R[i] = tmp;
+            }
+        }
     }
 }
 
@@ -104,10 +119,13 @@ static bool list_is_ordered(node_t *list) {
 
 static void list_display(node_t *list) {
     printf("%s IN ORDER : ", list_is_ordered(list) ? "   " : "NOT");
-    while (list) {
+    int mx = 20; // maximum number of output
+    while (mx-- && list) {
         printf("%d ", list->value);
         list = list->next;
     }
+    if (mx)
+        printf("...");
     printf("\n");
 }
 
@@ -131,7 +149,7 @@ static void list_free(node_t **list) {
 }
 
 int main(int argc, char **argv) {
-    size_t count = 20;
+    size_t count = 200000;
 
     srandom(time(NULL)); // random seed
 
