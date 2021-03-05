@@ -9,14 +9,10 @@
 
 typedef struct __element {
     char *value;
-    struct __element *next;
     struct list_head list;
 } list_ele_t;
 
 typedef struct {
-    list_ele_t *head; /* Linked list of elements */
-    list_ele_t *tail;
-    size_t size;
     struct list_head list;
 } queue_t;
 
@@ -24,7 +20,7 @@ static list_ele_t *get_middle(struct list_head *list)
 {
     struct list_head *fast = list->next, *slow;
     list_for_each (slow, list) {
-        if (fast->next == list || fast->next->next == list) // if (COND1 || COND2)
+        if (fast->next == list || fast->next->next == list)
             break;
         fast = fast->next->next;
     }
@@ -93,8 +89,6 @@ static queue_t *q_new()
     queue_t *q = malloc(sizeof(queue_t));
     if (!q) return NULL;
 
-    q->head = q->tail = NULL;
-    q->size = 0;
     INIT_LIST_HEAD(&q->list);
     return q;
 }
@@ -103,12 +97,12 @@ static void q_free(queue_t *q)
 {
     if (!q) return;
 
-    list_ele_t *current = q->head;
-    while (current) {
-        list_ele_t *tmp = current;
+    struct list_head *current = q->list.next;
+    while (current != &q->list) {
+        struct list_head *tmp = current;
         current = current->next;
-        free(tmp->value);
-        free(tmp);
+        free(list_entry(tmp, list_ele_t, list)->value);
+        free(list_entry(tmp, list_ele_t, list));
     }
     free(q);
 }
@@ -128,12 +122,7 @@ bool q_insert_head(queue_t *q, char *s)
     }
 
     newh->value = new_value;
-    newh->next = q->head;
-    q->head = newh;
-    if (q->size == 0)
-        q->tail = newh;
-    q->size++;
-    list_add_tail(&newh->list, &q->list);
+    list_add_tail(&newh->list, q->list.next);
 
     return true;
 }
@@ -142,7 +131,7 @@ static void q_show(queue_t *q)
 {
     struct list_head *node;
     list_for_each (node, &q->list) {
-        printf("%s\n", list_entry(node, list_ele_t, list)->value);
+        printf("%s", list_entry(node, list_ele_t, list)->value);
     }
 }
 
@@ -161,6 +150,7 @@ int main(void)
     fclose(fp);
 
     list_merge_sort(q);
+    q_show(q);
     assert(validate(q));
 
     q_free(q);
