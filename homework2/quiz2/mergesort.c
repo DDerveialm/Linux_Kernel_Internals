@@ -8,8 +8,9 @@
 #include "list.h"
 
 typedef struct __element {
-    char *value;
     struct list_head list;
+    /* Put struct list_head in the initial(first) member */
+    char *value;
 } list_ele_t;
 
 static struct list_head *get_middle(struct list_head *head)
@@ -29,8 +30,8 @@ static void list_merge(struct list_head *lhs,
     INIT_LIST_HEAD(head);
 
     while (!list_empty(lhs) && !list_empty(rhs)) {
-        char *lv = list_entry(lhs->next, list_ele_t, list)->value;
-        char *rv = list_entry(rhs->next, list_ele_t, list)->value;
+        char *lv = ((list_ele_t *)lhs->next)->value;
+        char *rv = ((list_ele_t *)rhs->next)->value;
         struct list_head *tmp = strcmp(lv, rv) <= 0 ? lhs->next : rhs->next;
         list_del(tmp);
         list_add_tail(tmp, head);
@@ -61,8 +62,8 @@ static bool validate(struct list_head *q)
 {
     struct list_head *node;
     for (node = q->next; node->next != q; node = node->next) {
-        if (strcmp(list_entry(node, list_ele_t, list)->value,
-                   list_entry(node->next, list_ele_t, list)->value) > 0)
+        if (strcmp(((list_ele_t *)node)->value,
+                   ((list_ele_t *)node->next)->value) > 0)
             return false;
     }
     return true;
@@ -83,8 +84,8 @@ static void q_free(struct list_head *q)
     while (current != q) {
         struct list_head *tmp = current;
         current = current->next;
-        free(list_entry(tmp, list_ele_t, list)->value);
-        free(list_entry(tmp, list_ele_t, list));
+        free(((list_ele_t *)tmp)->value);
+        free((list_ele_t *)tmp);
     }
     free(q);
 }
@@ -102,7 +103,7 @@ bool q_insert_head(struct list_head *q, char *s)
     }
 
     newh->value = new_value;
-    list_add_tail(&newh->list, q->next);
+    list_add_tail((struct list_head *)newh, q->next);
 
     return true;
 }
@@ -111,7 +112,7 @@ static void q_show(struct list_head *q)
 {
     struct list_head *node;
     list_for_each (node, q) {
-        printf("%s", list_entry(node, list_ele_t, list)->value);
+        printf("%s", ((list_ele_t *)node)->value);
     }
 }
 
