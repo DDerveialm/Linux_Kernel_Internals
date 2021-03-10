@@ -11,10 +11,10 @@ void bitcpy(void *_dest,      /* Address of the buffer to write to */
 {
     size_t read_lhs = _read & 7;
     size_t read_rhs = 8 - read_lhs;
-    const uint8_t *source = (const uint8_t *) _src + (_read / 8);
+    const uint8_t *source = (const uint8_t *) _src + (_read >> 3);
     size_t write_lhs = _write & 7;
     size_t write_rhs = 8 - write_lhs;
-    uint8_t *dest = (uint8_t *) _dest + (_write / 8);
+    uint8_t *dest = (uint8_t *) _dest + (_write >> 3);
 
     static const uint8_t read_mask[] = {
         0x00, /*    == 0    00000000b   */
@@ -41,28 +41,25 @@ void bitcpy(void *_dest,      /* Address of the buffer to write to */
     };
 
     while (count > 0) {
-        uint8_t data = *source++;
         size_t bitsize = (count > 8) ? 8 : count;
+        uint8_t data = *source++;
         if (read_lhs > 0) {
             data <<= read_lhs;
-            if (bitsize > read_rhs)
-                data |= (*source >> read_rhs);
+            data |= (*source >> read_rhs);
         }
+        data &= read_mask[bitsize];
 
-        if (bitsize < 8)
-            data &= read_mask[bitsize];
-
-        uint8_t original = *dest;
         uint8_t mask = read_mask[write_lhs];
         if (bitsize > write_rhs) {
             /* Cross multiple bytes */
-            *dest++ = (original & mask) | (data >> write_lhs);
-            original = *dest & write_mask[bitsize - write_rhs];
-            *dest = original | (data << write_rhs);
+            *dest = (*dest & mask) | (data >> write_lhs);
+            ++dest;
+            *dest = (*dest & write_mask[bitsize - write_rhs]) | (data << write_rhs);
         } else {
             // Since write_lhs + bitsize is never >= 8, no out-of-bound access.
             mask |= write_mask[write_lhs + bitsize];
-            *dest++ = (original & mask) | (data >> write_lhs);
+            *dest = (*dest & mask) | (data >> write_lhs);
+            ++dest;
         }
 
         count -= bitsize;
