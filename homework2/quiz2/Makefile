@@ -7,5 +7,11 @@ test2: power_of_2.c
 test3: bitcpy.c
 	gcc -o test3 bitcpy.c -Wall -Wextra -Wshadow -g -fsanitize=address,undefined
 
+test4: cstr.h cstr.c str_intern.c
+	gcc -c cstr.c -Wall -Wextra -Wshadow -g -fsanitize=address,undefined
+	gcc -c str_intern.c -Wall -Wextra -Wshadow -g -fsanitize=address,undefined
+	gcc -o test4 cstr.o str_intern.o -Wall -Wextra -Wshadow -g -fsanitize=address,undefined
+
+
 clean:
-	rm test1 test2 test3
+	rm test1 test2 test3 test4 *.o
