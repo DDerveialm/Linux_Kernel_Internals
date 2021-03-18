@@ -10,6 +10,7 @@
 #define MAX_STR_LEN_BITS (54)
 #define MAX_STR_LEN ((1UL << MAX_STR_LEN_BITS) - 1)
 
+#define STACK_SIZE 15
 #define LARGE_STRING_LEN 256
 
 typedef union {
@@ -18,10 +19,10 @@ typedef union {
      * much like fbstring:
      * https://github.com/facebook/folly/blob/master/folly/docs/FBString.md
      */
-    char data[16];
+    char data[STACK_SIZE + 1];
 
     struct {
-        uint8_t filler[15],
+        uint8_t filler[STACK_SIZE],
             /* how many free bytes in this stack allocated string
              * same idea as fbstring
              */
@@ -50,88 +51,104 @@ static inline bool xs_is_large_string(const xs *x)
 
 static inline size_t xs_size(const xs *x)
 {
-    return xs_is_ptr(x) ? x->size : 15 - x->space_left;
+    return xs_is_ptr(x) ? x->size : STACK_SIZE - x->space_left;
+}
+
+static inline void xs_set_size(xs *x, size_t s)
+{
+    if (!xs_is_ptr(x))
+        x->space_left = STACK_SIZE - s;
+    else
+        x->size = s;
 }
 
 static inline char *xs_data(const xs *x)
 {
     if (!xs_is_ptr(x))
         return (char *) x->data;
-
-    if (xs_is_large_string(x))
+    else if (xs_is_large_string(x))
         return (char *) (x->ptr + 4);
-    return (char *) x->ptr;
+    else 
+        return (char *) x->ptr;
 }
 
 static inline size_t xs_capacity(const xs *x)
 {
-    return xs_is_ptr(x) ? ((size_t) 1 << x->capacity) - 1 : 15;
+    return xs_is_ptr(x) ? ((size_t) 1UL << x->capacity) - 1 : 15;
 }
 
 static inline void xs_set_refcnt(const xs *x, int val)
 {
-    *((int *) ((size_t) x->ptr)) = val;
+    *((int *) x->ptr) = val;
 }
 
 static inline void xs_inc_refcnt(const xs *x)
 {
     if (xs_is_large_string(x))
-        ++(*(int *) ((size_t) x->ptr));
+        ++(*(int *) x->ptr);
 }
 
 static inline int xs_dec_refcnt(const xs *x)
 {
     if (!xs_is_large_string(x))
         return 0;
-    return --(*(int *) ((size_t) x->ptr));
+    return --(*(int *) x->ptr);
 }
 
 static inline int xs_get_refcnt(const xs *x)
 {
     if (!xs_is_large_string(x))
         return 0;
-    return *(int *) ((size_t) x->ptr);
+    return *(int *) x->ptr;
 }
 
 #define xs_literal_empty() \
-    (xs) { .space_left = 15 }
+    (xs) { .data[0] = '\0', .space_left = 15, .is_ptr = 0, .is_large_string = 0 }
 
 /* lowerbound (floor log2) */
 static inline int ilog2(uint32_t n) { return 32 - __builtin_clz(n) - 1; }
 
-static void xs_allocate_data(xs *x, size_t len, bool reallocate)
+static inline xs *xs_newempty(xs *x)
 {
-    /* Medium string */
-    if (len < LARGE_STRING_LEN) {
-        x->ptr = reallocate ? realloc(x->ptr, (size_t) 1 << x->capacity)
-                            : malloc((size_t) 1 << x->capacity);
-        return;
+    *x = xs_literal_empty();
+    return x;
+}
+
+static inline xs *xs_free(xs *x)
+{
+    if (xs_is_ptr(x) && xs_dec_refcnt(x) <= 0)
+        free(x->ptr);
+    return xs_newempty(x);
+}
+
+/* Allocate enough memory to store string of size len.
+ * It will free the previously allocated memory if there is.
+ */
+static void xs_allocate(xs *x, size_t len)
+{
+    x->capacity = ilog2(len) + 1;
+    xs_free(x);
+
+    if (len >= LARGE_STRING_LEN) {
+        /* Large string */
+        x->is_large_string = 1;
+        /* The extra 4 bytes are used to store the reference count */
+        x->ptr = malloc((size_t)(1UL << x->capacity) + 4);
+        x->is_ptr = 1;
+        xs_set_refcnt(x, 1);
+    } else if (len > STACK_SIZE) {
+        /* Medium string */
+        x->ptr = malloc((size_t) 1UL << x->capacity);
+        x->is_ptr = 1;
     }
-
-    /* Large string */
-    x->is_large_string = 1;
-
-    /* The extra 4 bytes are used to store the reference count */
-    x->ptr = reallocate ? realloc(x->ptr, (size_t)(1 << x->capacity) + 4)
-                        : malloc((size_t)(1 << x->capacity) + 4);
-
-    xs_set_refcnt(x, 1);
 }
 
 xs *xs_new(xs *x, const void *p)
 {
-    *x = xs_literal_empty();
-    size_t len = strlen(p) + 1;
-    if (len > 16) {
-        x->capacity = ilog2(len) + 1;
-        x->size = len - 1;
-        x->is_ptr = true;
-        xs_allocate_data(x, x->size, 0);
-        memcpy(xs_data(x), p, len);
-    } else {
-        memcpy(x->data, p, len);
-        x->space_left = 15 - (len - 1);
-    }
+    size_t len = strlen(p);
+    xs_allocate(x, len);
+    memcpy(xs_data(x), p, len + 1);
+    xs_set_size(x, len);
     return x;
 }
 
@@ -149,54 +166,57 @@ xs *xs_new(xs *x, const void *p)
 xs *xs_grow(xs *x, size_t len)
 {
     char buf[16];
+    char *backup, *f = NULL;
 
     if (len <= xs_capacity(x))
         return x;
 
     /* Backup first */
-    if (!xs_is_ptr(x))
-        memcpy(buf, x->data, 16);
-
-    x->is_ptr = true;
-    x->capacity = ilog2(len) + 1;
-
     if (xs_is_ptr(x)) {
-        xs_allocate_data(x, len, 1);
+        backup = xs_data(x);
+        f = x->ptr;
+        x->is_ptr = 0;
     } else {
-        xs_allocate_data(x, len, 0);
-        memcpy(xs_data(x), buf, 16);
+        memcpy(buf, x->data, 16);
+        backup = (char *) &buf;
     }
+
+    xs_allocate(x, len);
+    memcpy(xs_data(x), backup, xs_size(x));
+
+    if (f)
+        free(f);
+
     return x;
 }
 
-static inline xs *xs_newempty(xs *x)
+static inline xs *xs_cpy(xs *dest, xs *src)
 {
-    *x = xs_literal_empty();
-    return x;
+    xs_free(dest);
+    *dest = *src;
+    size_t len = xs_size(src);
+    if (len >= LARGE_STRING_LEN)
+        xs_inc_refcnt(src);
+    else if (len > STACK_SIZE) {
+        dest->is_ptr = 0;
+        xs_allocate(dest, len);
+        memcpy(xs_data(dest), xs_data(src), len + 1);
+    }
+    return dest;
 }
 
-static inline xs *xs_free(xs *x)
-{
-    if (xs_is_ptr(x) && xs_dec_refcnt(x) <= 0)
-        free(x->ptr);
-    return xs_newempty(x);
-}
-
-static bool xs_cow_lazy_copy(xs *x, char **data)
+static bool xs_cow_lazy_copy(xs *x)
 {
     if (xs_get_refcnt(x) <= 1)
         return false;
 
     /* Lazy copy */
+    char *data = xs_data(x);
     xs_dec_refcnt(x);
-    xs_allocate_data(x, x->size, 0);
+    x->is_ptr = 0;
+    xs_allocate(x, xs_size(x));
 
-    if (data) {
-        memcpy(xs_data(x), *data, x->size);
-
-        /* Update the newly allocated pointer */
-        *data = xs_data(x);
-    }
+    memcpy(xs_data(x), data, x->size + 1);
     return true;
 }
 
@@ -205,10 +225,9 @@ xs *xs_concat(xs *string, const xs *prefix, const xs *suffix)
     size_t pres = xs_size(prefix), sufs = xs_size(suffix),
            size = xs_size(string), capacity = xs_capacity(string);
 
+    xs_cow_lazy_copy(string);
     char *pre = xs_data(prefix), *suf = xs_data(suffix),
          *data = xs_data(string);
-
-    xs_cow_lazy_copy(string, &data);
 
     if (size + pres + sufs <= capacity) {
         memmove(data + pres, data, size);
@@ -238,16 +257,14 @@ xs *xs_trim(xs *x, const char *trimset)
     if (!trimset[0])
         return x;
 
+    xs_cow_lazy_copy(x);
     char *dataptr = xs_data(x), *orig = dataptr;
-
-    if (xs_cow_lazy_copy(x, &dataptr))
-        orig = dataptr;
 
     /* similar to strspn/strpbrk but it operates on binary data */
     uint8_t mask[32] = {0};
 
-#define check_bit(byte) (mask[(uint8_t) byte / 8] & 1 << (uint8_t) byte % 8)
-#define set_bit(byte) (mask[(uint8_t) byte / 8] |= 1 << (uint8_t) byte % 8)
+#define check_bit(i) (mask[(uint8_t) i >> 3] & 1 << ((uint8_t) i & 7))
+#define set_bit(i) (mask[(uint8_t) i >> 3] |= 1 << ((uint8_t) i & 7))
     size_t i, slen = xs_size(x), trimlen = strlen(trimset);
 
     for (i = 0; i < trimlen; i++)
@@ -270,10 +287,7 @@ xs *xs_trim(xs *x, const char *trimset)
     if (orig[slen])
         orig[slen] = 0;
 
-    if (xs_is_ptr(x))
-        x->size = slen;
-    else
-        x->space_left = 15 - slen;
+    xs_set_size(x, slen);
     return x;
 #undef check_bit
 #undef set_bit
